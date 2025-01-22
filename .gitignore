@@ -1,4 +1,5 @@
 .venv
 .vscode
-*.png
+barcode.png
+label.png
 
