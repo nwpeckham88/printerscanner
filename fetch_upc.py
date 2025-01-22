@@ -46,7 +46,8 @@ def fetch_upc_data(upc_code: str):
             "weight": item.get("weight", "Unknown Weight"),
             "highest_price": item.get("highest_recorded_price", 0.0),
             "ean": item.get("ean", "Unknown EAN"),
-            "asin": item.get("asin", "Unknown ASIN")
+            "asin": item.get("asin", "Unknown ASIN"),
+            "images": item.get("images", [])
         }
     return {
         "upc": upc_code,
@@ -61,7 +62,8 @@ def fetch_upc_data(upc_code: str):
         "weight": "Unknown Weight",
         "highest_price": 0.0,
         "ean": "Unknown EAN",
-        "asin": "Unknown ASIN"
+        "asin": "Unknown ASIN",
+        "images": []
     }
 
 def generate_barcode(upc_code: str, file_path: str):
@@ -69,48 +71,85 @@ def generate_barcode(upc_code: str, file_path: str):
     barcode_obj.save(file_path.split('.')[0])  # Save without the extension to avoid double extension
 
 def print_label(info: dict, printer_name: str):
-    label_text = (
-        f"Product: {info.get('name')}\n"
-        f"Price: {info.get('price')}\n"
-        f"UPC: {info.get('upc')}\n"
-        f"Brand: {info.get('brand')}\n"
-        f"Model: {info.get('model')}\n"
-        f"Color: {info.get('color')}\n"
-        f"Size: {info.get('size')}\n"
-        f"Weight: {info.get('weight')}\n"
-        f"Highest Price: {info.get('highest_price')}\n"
-        f"EAN: {info.get('ean')}\n"
-        f"ASIN: {info.get('asin')}\n"
-    )
+    product_name = info.get('name')
+    label_text = ""
     
+    if info.get('price') != 0.0:
+        label_text += f"Price: {info.get('price')}\n"
+    if info.get('upc') != "Unknown UPC":
+        label_text += f"UPC: {info.get('upc')}\n"
+    if info.get('brand') != "Unknown Brand":
+        label_text += f"Brand: {info.get('brand')}\n"
+    if info.get('model') != "Unknown Model":
+        label_text += f"Model: {info.get('model')}\n"
+    if info.get('color') != "Unknown Color":
+        label_text += f"Color: {info.get('color')}\n"
+    if info.get('size') != "Unknown Size":
     # Create an image for the label
     label_image = Image.new('RGB', (400, 800), color='white')
     draw = ImageDraw.Draw(label_image)
     
-    # Load a font
+    # Load fonts
     try:
-        font = ImageFont.truetype("arial.ttf", 20)  # Use a larger font size
+        font_large = ImageFont.truetype("arial.ttf", 30)  # Larger font for product name
+        font = ImageFont.truetype("arial.ttf", 20)  # Regular font for other details
     except IOError:
-        font = ImageFont.load_default()  # Fallback to default font if "arial.ttf" is not available
+        font_large = ImageFont.load_default()
+        font = ImageFont.load_default()
+    
+    # Wrap text if it goes off the edge of the label
+    def wrap_text(text, font, max_width):
+        lines = []
+        words = text.split()
+        while words:
+            line = ''
+            while words and draw.textbbox((0, 0), line + words[0], font=font)[2] <= max_width:
+                line += (words.pop(0) + ' ')
+            lines.append(line)
+        return '\n'.join(lines)
+    
+    wrapped_product_name = wrap_text(product_name, font_large, 380)  # 380 to account for padding
+    wrapped_label_text = wrap_text(label_text, font, 380)  # 380 to account for padding
     
     # Calculate text height
-    text_width, text_height = draw.textbbox((0, 0), label_text, font=font)[2:]
+    product_name_width, product_name_height = draw.textbbox((0, 0), wrapped_product_name, font=font_large)[2:]
+    text_width, text_height = draw.textbbox((0, 0), wrapped_label_text, font=font)[2:]
     
-    # Draw the text on the image, ensuring it is justified
-    draw.multiline_text((10, 800 - text_height - 215), label_text, fill='black', font=font)
+    # Adjust label height based on text height
+    label_height = product_name_height + text_height + 415  # Add some padding for the barcode, product image, and margins
+    label_image = Image.new('RGB', (400, label_height), color='white')
+    draw = ImageDraw.Draw(label_image)
+    
+    # Draw the product name centered
+    product_name_x = (400 - product_name_width) // 2
+    draw.multiline_text((product_name_x, 10), wrapped_product_name, fill='black', font=font_large, align="center")
+    
+    # Draw the text on the image, left justified
+    draw.multiline_text((10, product_name_height + 20), wrapped_label_text, fill='black', font=font, align="left")
+    
+    # Draw product image if available
+    if 'images' in info and info['images']:
+        try:
+            product_image_url = info['images'][0]
+            product_image = Image.open(requests.get(product_image_url, stream=True).raw)
+            product_image.thumbnail((380, 200), Image.LANCZOS)  # Maintain aspect ratio
+            product_image_x = (400 - product_image.width) // 2
+            label_image.paste(product_image, (product_image_x, product_name_height + text_height + 30))
+        except Exception as e:
+            print(f"Error loading product image: {e}")
     
     if info.get('name') == "Unknown Product":
         # Draw a sad face if no information is found
-        draw.text((150, 700), ":(", fill='black', font=font)
+        draw.text((150, label_height - 100), ":(", fill='black', font=font)
     else:
         # Load the barcode image
         barcode_image = Image.open("barcode.png")
         
-        # Resize the barcode image to fit the bottom quarter
-        barcode_image = barcode_image.resize((400, 200))
+        # Resize the barcode image to fit the bottom quarter with margin
+        barcode_image = barcode_image.resize((390, 190))
         
-        # Paste the barcode image onto the label image
-        label_image.paste(barcode_image, (0, 600))
+        # Paste the barcode image onto the label image with margin
+        label_image.paste(barcode_image, (5, label_height - 195))
     
     # Save the final label image
     label_image.save("label.png")
